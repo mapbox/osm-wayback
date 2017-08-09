@@ -150,6 +150,7 @@ public:
         }
     }
 
+
     void store_tags(const osmium::Way& way) {
         if(store_tags(way, m_cf_ways)) {
             stored_ways_count++;
@@ -212,6 +213,7 @@ public:
     }
 
     bool store_tags(const osmium::OSMObject& object, rocksdb::ColumnFamilyHandle* cf) {
+
         const auto lookup = make_lookup(object.id(), object.version());
         if (object.tags().empty()) {
             empty_objects_count++;
@@ -232,6 +234,20 @@ public:
         doc.AddMember("@uid", object.uid(), a);
         doc.AddMember("@changeset", object.changeset(), a);
         doc.AddMember("@version", object.version(), a);
+
+        // Add closed at if found
+        std::string changeset_json;
+        auto read_status = m_db->Get(rocksdb::ReadOptions(), m_cf_changesets, std::to_string(object.changeset()), &changeset_json);
+        if (read_status.ok()) {
+            rapidjson::Document changeset_doc;
+            std::cout << changeset_json << std::endl;
+            if(!changeset_doc.Parse<0>(changeset_json.c_str()).HasParseError()) {
+                if(changeset_doc.HasMember("@closed_at")) {
+                    // doc.AddMember("@closed_at", changeset_doc["@closed_at"], a);
+                    // std::cout << "Found closed at" << changeset_doc["@closed_at"].GetString() << std::endl;
+                }
+            }
+        }
 
         //Ignore trying to store geometries, but if we could scale that, it'd be awesome.
         const osmium::TagList& tags = object.tags();
