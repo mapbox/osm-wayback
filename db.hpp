@@ -28,6 +28,7 @@ class TagStore {
     rocksdb::ColumnFamilyHandle* m_cf_ways;
     rocksdb::ColumnFamilyHandle* m_cf_nodes;
     rocksdb::ColumnFamilyHandle* m_cf_relations;
+    rocksdb::ColumnFamilyHandle* m_cf_changesets;
     rocksdb::WriteOptions m_write_options;
 
     rocksdb::WriteBatch m_buffer_batch;
@@ -62,6 +63,10 @@ class TagStore {
         uint64_t relation_keys{0};
         m_db->GetIntProperty(m_cf_relations, "rocksdb.estimate-num-keys", &relation_keys);
         std::cerr << "Stored ~" << relation_keys  << "/" << stored_relations_count << " relations" << std::endl;
+
+        uint64_t changeset_keys{0};
+        m_db->GetIntProperty(m_cf_changesets, "rocksdb.estimate-num-keys", &changeset_keys);
+        std::cerr << "Stored ~" << changeset_keys  << "/" << stored_changesets_count << " changesets" << std::endl;
     }
 
 public:
@@ -71,6 +76,7 @@ public:
     unsigned long stored_nodes_count{0};
     unsigned long stored_ways_count{0};
     unsigned long stored_relations_count{0};
+    unsigned long stored_changesets_count{0};
 
     unsigned long stored_objects_count() {
         return stored_nodes_count + stored_ways_count + stored_relations_count;
@@ -104,6 +110,7 @@ public:
             s = m_db->CreateColumnFamily(rocksdb::ColumnFamilyOptions(), "ways", &m_cf_ways);
             assert(s.ok());
             s = m_db->CreateColumnFamily(rocksdb::ColumnFamilyOptions(), "relations", &m_cf_relations);
+            s = m_db->CreateColumnFamily(rocksdb::ColumnFamilyOptions(), "changesets", &m_cf_changesets);
             assert(s.ok());
         } else {
             db_options.error_if_exists = false;
@@ -118,6 +125,7 @@ public:
             column_families.push_back(rocksdb::ColumnFamilyDescriptor( "nodes", rocksdb::ColumnFamilyOptions()));
             column_families.push_back(rocksdb::ColumnFamilyDescriptor( "ways", rocksdb::ColumnFamilyOptions()));
             column_families.push_back(rocksdb::ColumnFamilyDescriptor( "relations", rocksdb::ColumnFamilyOptions()));
+            column_families.push_back(rocksdb::ColumnFamilyDescriptor( "changesets", rocksdb::ColumnFamilyOptions()));
 
             std::vector<rocksdb::ColumnFamilyHandle*> handles;
 
@@ -127,6 +135,7 @@ public:
             m_cf_nodes = handles[1];
             m_cf_ways = handles[2];
             m_cf_relations = handles[3];
+            m_cf_changesets = handles[4];
         }
     }
   rocksdb::Status get_tags(const int64_t osm_id, const int osm_type, const int version, std::string* json_value) {
@@ -157,6 +166,49 @@ public:
         if(store_tags(relation, m_cf_relations)) {
             stored_relations_count++;
         }
+    }
+
+    bool store_changeset(const osmium::Changeset& changeset) {
+        rapidjson::Document doc;
+        doc.SetObject();
+
+        rapidjson::Document::AllocatorType& a = doc.GetAllocator();
+
+        doc.AddMember("@created_at", changeset.created_at().to_iso(), a);
+        doc.AddMember("@closed_at", changeset.closed_at().to_iso(), a);
+        doc.AddMember("@user", std::string{changeset.user()}, a);
+        doc.AddMember("@uid", changeset.uid(), a);
+        doc.AddMember("@num_changes", changeset.num_changes(), a);
+        doc.AddMember("@num_comments", changeset.num_comments(), a);
+
+        const osmium::TagList& tags = changeset.tags();
+        rapidjson::Value changeset_tags(rapidjson::kObjectType);
+        for (const osmium::Tag& tag : tags) {
+            rapidjson::Value key(rapidjson::StringRef(tag.key()));
+            rapidjson::Value value(rapidjson::StringRef(tag.value()));
+            changeset_tags.AddMember(key, value, a);
+        }
+
+        doc.AddMember("@tags", changeset_tags, a);
+
+        rapidjson::StringBuffer buffer;
+        rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+        doc.Accept(writer);
+
+        auto lookup = std::to_string(changeset.id());
+        rocksdb::Status stat = m_buffer_batch.Put(m_cf_changesets, lookup, buffer.GetString());
+
+        stored_changesets_count++;
+        if (m_buffer_batch.Count() > 1000) {
+            m_db->Write(m_write_options, &m_buffer_batch);
+            m_buffer_batch.Clear();
+        }
+
+        if (stored_changesets_count != 0 && (stored_changesets_count % 1000000) == 0) {
+            flush_family("changesets", m_cf_changesets);
+            report_count_stats();
+        }
+        return true;
     }
 
     bool store_tags(const osmium::OSMObject& object, rocksdb::ColumnFamilyHandle* cf) {
@@ -228,10 +280,12 @@ public:
         flush_family("nodes", m_cf_nodes);
         flush_family("ways", m_cf_ways);
         flush_family("relations", m_cf_relations);
+        flush_family("changesets", m_cf_changesets);
 
         compact_family("nodes", m_cf_nodes);
         compact_family("ways", m_cf_ways);
         compact_family("relations", m_cf_relations);
+        compact_family("changesets", m_cf_changesets);
 
         report_count_stats();
     }

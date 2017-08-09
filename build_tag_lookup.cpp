@@ -1,11 +1,3 @@
-/*
-
-  Build Tag History Database
-
-  (Based on osmium_pub_names example)
-
-*/
-
 #include <cstdlib>  // for std::exit
 #include <cstring>  // for std::strncmp
 #include <iostream> // for std::cout, std::cerr
@@ -85,7 +77,7 @@ int main(int argc, char* argv[]) {
     std::string index_dir = argv[1];
     std::string osm_filename = argv[2];
 
-    TagStore store(index_dir, true);
+    TagStore store(index_dir, false);
     TagStoreHandler tag_handler(&store);
 
     std::thread t_progress(report_progress, &store);
