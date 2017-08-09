@@ -150,8 +150,52 @@ public:
         }
     }
 
+    void lookup_nodes(const osmium::Way& way, const int closed_at) {
+        const osmium::WayNodeList& node_refs = way.nodes();
+        for (const osmium::NodeRef& node_ref : node_refs) {
+            auto node_id = node_ref.ref();
+
+            // Find all the versions
+            int node_version{1};
+            for(int v = 1; v < 1000; v++) {
+                std::string node_json;
+
+                auto read_status = m_db->Get(rocksdb::ReadOptions(), m_cf_nodes, make_lookup(node_id, v), &node_json);
+
+                if(read_status.ok()) {
+                    rapidjson::Document node_doc;
+                    if(!node_doc.Parse<0>(node_json.c_str()).HasParseError()) {
+                        if(node_doc.HasMember("@timestamp")) {
+                            auto ts = node_doc["@timestamp"].GetInt();
+                            if (ts > closed_at) {
+                                break;
+                            } else {
+                                node_version = v;
+                            }
+                        }
+                    }
+                }
+            }
+
+            std::cout << "Found real node version " << node_version << std::endl;
+        }
+    }
 
     void store_tags(const osmium::Way& way) {
+        // Add closed at if found
+        std::string changeset_json;
+        auto read_status = m_db->Get(rocksdb::ReadOptions(), m_cf_changesets, std::to_string(way.changeset()), &changeset_json);
+        if (read_status.ok()) {
+            rapidjson::Document changeset_doc;
+            std::cout << changeset_json << std::endl;
+            if(!changeset_doc.Parse<0>(changeset_json.c_str()).HasParseError()) {
+                if(changeset_doc.HasMember("@closed_at")) {
+                    auto closed_at = changeset_doc["@closed_at"].GetInt();
+                    lookup_nodes(way, closed_at);
+                }
+            }
+        }
+
         if(store_tags(way, m_cf_ways)) {
             stored_ways_count++;
         }
@@ -175,8 +219,8 @@ public:
 
         rapidjson::Document::AllocatorType& a = doc.GetAllocator();
 
-        doc.AddMember("@created_at", changeset.created_at().to_iso(), a);
-        doc.AddMember("@closed_at", changeset.closed_at().to_iso(), a);
+        doc.AddMember("@created_at", static_cast<int>(changeset.created_at().seconds_since_epoch()), a);
+        doc.AddMember("@closed_at", static_cast<int>(changeset.closed_at().seconds_since_epoch()), a);
         doc.AddMember("@user", std::string{changeset.user()}, a);
         doc.AddMember("@uid", changeset.uid(), a);
         doc.AddMember("@num_changes", changeset.num_changes(), a);
@@ -225,7 +269,7 @@ public:
 
         rapidjson::Document::AllocatorType& a = doc.GetAllocator();
 
-        doc.AddMember("@timestamp", object.timestamp().to_iso(), a); //ISO is helpful for debugging, but we should leave it
+        doc.AddMember("@timestamp", static_cast<int>(object.timestamp().seconds_since_epoch()), a);
         if (object.deleted()){
           doc.AddMember("@deleted", object.deleted(), a);
         }
@@ -234,20 +278,6 @@ public:
         doc.AddMember("@uid", object.uid(), a);
         doc.AddMember("@changeset", object.changeset(), a);
         doc.AddMember("@version", object.version(), a);
-
-        // Add closed at if found
-        std::string changeset_json;
-        auto read_status = m_db->Get(rocksdb::ReadOptions(), m_cf_changesets, std::to_string(object.changeset()), &changeset_json);
-        if (read_status.ok()) {
-            rapidjson::Document changeset_doc;
-            std::cout << changeset_json << std::endl;
-            if(!changeset_doc.Parse<0>(changeset_json.c_str()).HasParseError()) {
-                if(changeset_doc.HasMember("@closed_at")) {
-                    // doc.AddMember("@closed_at", changeset_doc["@closed_at"], a);
-                    // std::cout << "Found closed at" << changeset_doc["@closed_at"].GetString() << std::endl;
-                }
-            }
-        }
 
         //Ignore trying to store geometries, but if we could scale that, it'd be awesome.
         const osmium::TagList& tags = object.tags();
