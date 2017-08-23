@@ -18,6 +18,7 @@
 #include <osmium/visitor.hpp>
 
 #include <chrono>
+#include "pbf_encoder.hpp"
 
 const std::string make_lookup(const int64_t osm_id, const int version){
   return std::to_string(osm_id) + "!" + std::to_string(version);
@@ -214,34 +215,9 @@ public:
     }
 
     bool store_changeset(const osmium::Changeset& changeset) {
-        rapidjson::Document doc;
-        doc.SetObject();
-
-        rapidjson::Document::AllocatorType& a = doc.GetAllocator();
-
-        doc.AddMember("@created_at", static_cast<int>(changeset.created_at().seconds_since_epoch()), a);
-        doc.AddMember("@closed_at", static_cast<int>(changeset.closed_at().seconds_since_epoch()), a);
-        doc.AddMember("@user", std::string{changeset.user()}, a);
-        doc.AddMember("@uid", changeset.uid(), a);
-        doc.AddMember("@num_changes", changeset.num_changes(), a);
-        doc.AddMember("@num_comments", changeset.num_comments(), a);
-
-        const osmium::TagList& tags = changeset.tags();
-        rapidjson::Value changeset_tags(rapidjson::kObjectType);
-        for (const osmium::Tag& tag : tags) {
-            rapidjson::Value key(rapidjson::StringRef(tag.key()));
-            rapidjson::Value value(rapidjson::StringRef(tag.value()));
-            changeset_tags.AddMember(key, value, a);
-        }
-
-        doc.AddMember("@tags", changeset_tags, a);
-
-        rapidjson::StringBuffer buffer;
-        rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
-        doc.Accept(writer);
-
         auto lookup = std::to_string(changeset.id());
-        rocksdb::Status stat = m_buffer_batch.Put(m_cf_changesets, lookup, buffer.GetString());
+        auto value = osmwayback::encode_changeset(changeset);
+        rocksdb::Status stat = m_buffer_batch.Put(m_cf_changesets, lookup, value);
 
         stored_changesets_count++;
         if (m_buffer_batch.Count() > 1000) {
