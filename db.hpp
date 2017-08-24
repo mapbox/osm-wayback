@@ -20,19 +20,21 @@
 #include <chrono>
 #include "pbf_encoder.hpp"
 
+namespace osmwayback {
+
 const std::string make_lookup(const int64_t osm_id, const int version){
   return std::to_string(osm_id) + "!" + std::to_string(version);
 }
 
-class TagStore {
+class RocksDBStore {
+    protected:
+
     rocksdb::DB* m_db;
     rocksdb::ColumnFamilyHandle* m_cf_ways;
     rocksdb::ColumnFamilyHandle* m_cf_nodes;
     rocksdb::ColumnFamilyHandle* m_cf_relations;
     rocksdb::ColumnFamilyHandle* m_cf_changesets;
     rocksdb::WriteOptions m_write_options;
-
-    rocksdb::WriteBatch m_buffer_batch;
 
     void flush_family(const std::string type, rocksdb::ColumnFamilyHandle* cf) {
         const auto start = std::chrono::steady_clock::now();
@@ -70,20 +72,7 @@ class TagStore {
         std::cerr << "Stored ~" << changeset_keys  << "/" << stored_changesets_count << " changesets" << std::endl;
     }
 
-public:
-    unsigned long empty_objects_count{0};
-    unsigned long stored_tags_count{0};
-
-    unsigned long stored_nodes_count{0};
-    unsigned long stored_ways_count{0};
-    unsigned long stored_relations_count{0};
-    unsigned long stored_changesets_count{0};
-
-    unsigned long stored_objects_count() {
-        return stored_nodes_count + stored_ways_count + stored_relations_count;
-    }
-
-    TagStore(const std::string index_dir, const bool create) {
+    RocksDBStore (const std::string index_dir, const bool create) {
         rocksdb::Options db_options;
         db_options.allow_mmap_writes = false;
         db_options.max_background_flushes = 4;
@@ -138,6 +127,29 @@ public:
             m_cf_relations = handles[3];
             m_cf_changesets = handles[4];
         }
+
+    }
+
+    public:
+
+    unsigned long empty_objects_count{0};
+    unsigned long stored_tags_count{0};
+
+    unsigned long stored_nodes_count{0};
+    unsigned long stored_ways_count{0};
+    unsigned long stored_relations_count{0};
+    unsigned long stored_changesets_count{0};
+
+    unsigned long stored_objects_count() {
+        return stored_nodes_count + stored_ways_count + stored_relations_count;
+    }
+};
+
+class TagStore : public RocksDBStore {
+    rocksdb::WriteBatch m_buffer_batch;
+
+public:
+    TagStore(const std::string index_dir, const bool create) : RocksDBStore(index_dir, create) {
     }
   rocksdb::Status get_tags(const int64_t osm_id, const int osm_type, const int version, std::string* json_value) {
         const auto lookup = make_lookup(osm_id, version);
@@ -312,3 +324,5 @@ public:
         report_count_stats();
     }
 };
+
+}

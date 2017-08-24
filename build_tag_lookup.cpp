@@ -12,10 +12,10 @@
 #include "db.hpp"
 
 class TagStoreHandler : public osmium::handler::Handler {
-    TagStore* m_store;
+    osmwayback::TagStore* m_store;
 
 public:
-    TagStoreHandler(TagStore* store) : m_store(store) {}
+    TagStoreHandler(osmwayback::TagStore* store) : m_store(store) {}
     long node_count = 0;
     int way_count = 0;
     int rel_count = 0;
@@ -37,7 +37,7 @@ public:
 
 std::atomic_bool stop_progress{false};
 
-void report_progress(const TagStore* store) {
+void report_progress(const osmwayback::TagStore* store) {
     unsigned long last_nodes_count{0};
     unsigned long last_ways_count{0};
     unsigned long last_relations_count{0};
@@ -77,7 +77,7 @@ int main(int argc, char* argv[]) {
     std::string index_dir = argv[1];
     std::string osm_filename = argv[2];
 
-    TagStore store(index_dir, false);
+    osmwayback::TagStore store(index_dir, false);
     TagStoreHandler tag_handler(&store);
 
     std::thread t_progress(report_progress, &store);

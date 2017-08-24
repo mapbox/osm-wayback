@@ -12,10 +12,10 @@
 #include "db.hpp"
 
 class ChangesetHandler : public osmium::handler::Handler {
-    TagStore* m_store;
+    osmwayback::TagStore* m_store;
 
 public:
-    ChangesetHandler(TagStore* store) : m_store(store) {}
+    ChangesetHandler(osmwayback::TagStore* store) : m_store(store) {}
     void changeset(const osmium::Changeset& changeset) {
         m_store->store_changeset(changeset);
     }
@@ -23,7 +23,7 @@ public:
 
 std::atomic_bool stop_progress{false};
 
-void report_progress(const TagStore* store) {
+void report_progress(const osmwayback::TagStore* store) {
     unsigned long last_changesets_count{0};
     auto start = std::chrono::steady_clock::now();
 
@@ -53,7 +53,7 @@ int main(int argc, char* argv[]) {
     std::string index_dir = argv[1];
     std::string changeset_filename = argv[2];
 
-    TagStore store(index_dir, true);
+    osmwayback::TagStore store(index_dir, true);
     ChangesetHandler handler(&store);
 
     std::thread t_progress(report_progress, &store);
