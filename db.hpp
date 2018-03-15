@@ -18,19 +18,23 @@
 #include <osmium/visitor.hpp>
 
 #include <chrono>
+#include "pbf_encoder.hpp"
+
+namespace osmwayback {
 
 const std::string make_lookup(const int64_t osm_id, const int version){
   return std::to_string(osm_id) + "!" + std::to_string(version);
 }
 
-class TagStore {
+class RocksDBStore {
+    protected:
+
     rocksdb::DB* m_db;
     rocksdb::ColumnFamilyHandle* m_cf_ways;
     rocksdb::ColumnFamilyHandle* m_cf_nodes;
     rocksdb::ColumnFamilyHandle* m_cf_relations;
+    rocksdb::ColumnFamilyHandle* m_cf_changesets;
     rocksdb::WriteOptions m_write_options;
-
-    rocksdb::WriteBatch m_buffer_batch;
 
     void flush_family(const std::string type, rocksdb::ColumnFamilyHandle* cf) {
         const auto start = std::chrono::steady_clock::now();
@@ -62,21 +66,13 @@ class TagStore {
         uint64_t relation_keys{0};
         m_db->GetIntProperty(m_cf_relations, "rocksdb.estimate-num-keys", &relation_keys);
         std::cerr << "Stored ~" << relation_keys  << "/" << stored_relations_count << " relations" << std::endl;
+
+        uint64_t changeset_keys{0};
+        m_db->GetIntProperty(m_cf_changesets, "rocksdb.estimate-num-keys", &changeset_keys);
+        std::cerr << "Stored ~" << changeset_keys  << "/" << stored_changesets_count << " changesets" << std::endl;
     }
 
-public:
-    unsigned long empty_objects_count{0};
-    unsigned long stored_tags_count{0};
-
-    unsigned long stored_nodes_count{0};
-    unsigned long stored_ways_count{0};
-    unsigned long stored_relations_count{0};
-
-    unsigned long stored_objects_count() {
-        return stored_nodes_count + stored_ways_count + stored_relations_count;
-    }
-
-    TagStore(const std::string index_dir, const bool create) {
+    RocksDBStore (const std::string index_dir, const bool create) {
         rocksdb::Options db_options;
         db_options.allow_mmap_writes = false;
         db_options.max_background_flushes = 4;
@@ -104,6 +100,7 @@ public:
             s = m_db->CreateColumnFamily(rocksdb::ColumnFamilyOptions(), "ways", &m_cf_ways);
             assert(s.ok());
             s = m_db->CreateColumnFamily(rocksdb::ColumnFamilyOptions(), "relations", &m_cf_relations);
+            s = m_db->CreateColumnFamily(rocksdb::ColumnFamilyOptions(), "changesets", &m_cf_changesets);
             assert(s.ok());
         } else {
             db_options.error_if_exists = false;
@@ -118,6 +115,7 @@ public:
             column_families.push_back(rocksdb::ColumnFamilyDescriptor( "nodes", rocksdb::ColumnFamilyOptions()));
             column_families.push_back(rocksdb::ColumnFamilyDescriptor( "ways", rocksdb::ColumnFamilyOptions()));
             column_families.push_back(rocksdb::ColumnFamilyDescriptor( "relations", rocksdb::ColumnFamilyOptions()));
+            column_families.push_back(rocksdb::ColumnFamilyDescriptor( "changesets", rocksdb::ColumnFamilyOptions()));
 
             std::vector<rocksdb::ColumnFamilyHandle*> handles;
 
@@ -127,7 +125,31 @@ public:
             m_cf_nodes = handles[1];
             m_cf_ways = handles[2];
             m_cf_relations = handles[3];
+            m_cf_changesets = handles[4];
         }
+
+    }
+
+    public:
+
+    unsigned long empty_objects_count{0};
+    unsigned long stored_tags_count{0};
+
+    unsigned long stored_nodes_count{0};
+    unsigned long stored_ways_count{0};
+    unsigned long stored_relations_count{0};
+    unsigned long stored_changesets_count{0};
+
+    unsigned long stored_objects_count() {
+        return stored_nodes_count + stored_ways_count + stored_relations_count;
+    }
+};
+
+class TagStore : public RocksDBStore {
+    rocksdb::WriteBatch m_buffer_batch;
+
+public:
+    TagStore(const std::string index_dir, const bool create) : RocksDBStore(index_dir, create) {
     }
   rocksdb::Status get_tags(const int64_t osm_id, const int osm_type, const int version, std::string* json_value) {
         const auto lookup = make_lookup(osm_id, version);
@@ -141,7 +163,52 @@ public:
         }
     }
 
+    void lookup_nodes(const osmium::Way& way, const int closed_at) {
+        const osmium::WayNodeList& node_refs = way.nodes();
+        for (const osmium::NodeRef& node_ref : node_refs) {
+            auto node_id = node_ref.ref();
+
+            // Find all the versions
+            int node_version{1};
+            for(int v = 1; v < 1000; v++) {
+                std::string node_json;
+
+                auto read_status = m_db->Get(rocksdb::ReadOptions(), m_cf_nodes, make_lookup(node_id, v), &node_json);
+
+                if(read_status.ok()) {
+                    rapidjson::Document node_doc;
+                    if(!node_doc.Parse<0>(node_json.c_str()).HasParseError()) {
+                        if(node_doc.HasMember("@timestamp")) {
+                            auto ts = node_doc["@timestamp"].GetInt();
+                            if (ts > closed_at) {
+                                break;
+                            } else {
+                                node_version = v;
+                            }
+                        }
+                    }
+                }
+            }
+
+            std::cout << "Found real node version " << node_version << std::endl;
+        }
+    }
+
     void store_tags(const osmium::Way& way) {
+        // Add closed at if found
+        std::string changeset_json;
+        auto read_status = m_db->Get(rocksdb::ReadOptions(), m_cf_changesets, std::to_string(way.changeset()), &changeset_json);
+        if (read_status.ok()) {
+            rapidjson::Document changeset_doc;
+            std::cout << changeset_json << std::endl;
+            if(!changeset_doc.Parse<0>(changeset_json.c_str()).HasParseError()) {
+                if(changeset_doc.HasMember("@closed_at")) {
+                    auto closed_at = changeset_doc["@closed_at"].GetInt();
+                    lookup_nodes(way, closed_at);
+                }
+            }
+        }
+
         if(store_tags(way, m_cf_ways)) {
             stored_ways_count++;
         }
@@ -159,7 +226,26 @@ public:
         }
     }
 
+    bool store_changeset(const osmium::Changeset& changeset) {
+        auto lookup = std::to_string(changeset.id());
+        auto value = osmwayback::encode_changeset(changeset);
+        rocksdb::Status stat = m_buffer_batch.Put(m_cf_changesets, lookup, value);
+
+        stored_changesets_count++;
+        if (m_buffer_batch.Count() > 1000) {
+            m_db->Write(m_write_options, &m_buffer_batch);
+            m_buffer_batch.Clear();
+        }
+
+        if (stored_changesets_count != 0 && (stored_changesets_count % 1000000) == 0) {
+            flush_family("changesets", m_cf_changesets);
+            report_count_stats();
+        }
+        return true;
+    }
+
     bool store_tags(const osmium::OSMObject& object, rocksdb::ColumnFamilyHandle* cf) {
+
         const auto lookup = make_lookup(object.id(), object.version());
         if (object.tags().empty()) {
             empty_objects_count++;
@@ -171,7 +257,7 @@ public:
 
         rapidjson::Document::AllocatorType& a = doc.GetAllocator();
 
-        doc.AddMember("@timestamp", object.timestamp().to_iso(), a); //ISO is helpful for debugging, but we should leave it
+        doc.AddMember("@timestamp", static_cast<int>(object.timestamp().seconds_since_epoch()), a);
         if (object.deleted()){
           doc.AddMember("@deleted", object.deleted(), a);
         }
@@ -228,11 +314,15 @@ public:
         flush_family("nodes", m_cf_nodes);
         flush_family("ways", m_cf_ways);
         flush_family("relations", m_cf_relations);
+        flush_family("changesets", m_cf_changesets);
 
         compact_family("nodes", m_cf_nodes);
         compact_family("ways", m_cf_ways);
         compact_family("relations", m_cf_relations);
+        compact_family("changesets", m_cf_changesets);
 
         report_count_stats();
     }
 };
+
+}

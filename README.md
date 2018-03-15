@@ -21,6 +21,12 @@ make
 
 ## Run
 
+First build up a changeset index (`http://planet.osm.org/planet/changesets-latest.osm.bz2`).
+
+```
+build_changeset_lookup INDEX_DIR OSM_CHANGESET_FILE
+```
+
 First build up a historic tag index.
 
 ```

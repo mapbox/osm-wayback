@@ -46,7 +46,7 @@ typedef std::map<std::string,std::string> StringStringMap;
 typedef std::map<std::string,std::string> VersionTags;
 typedef std::vector < std::map<std::string, std::string> > TagHistoryArray;
 
-void write_with_history_tags(TagStore* store, const std::string line) {
+void write_with_history_tags(osmwayback::TagStore* store, const std::string line) {
     rapidjson::Document geojson_doc;
     if(geojson_doc.Parse<0>(line.c_str()).HasParseError()) {
         std::cerr << "ERROR" << std::endl;
@@ -213,7 +213,7 @@ int main(int argc, char* argv[]) {
 
     std::string index_dir = argv[1];
     std::cout << "init tag dir" << std::endl;
-    TagStore store(index_dir, false);
+    osmwayback::TagStore store(index_dir, false);
 
     rapidjson::Document doc;
     for (std::string line; std::getline(std::cin, line);) {

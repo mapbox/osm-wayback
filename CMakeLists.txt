@@ -55,7 +55,9 @@ set(ALL_LIBRARIES ${CMAKE_THREAD_LIBS_INIT} ${EXPAT_LIBRARIES} ${ROCKSDB_LIBRARI
 #----------------------------------------------------------------------
 add_executable(build_tag_lookup build_tag_lookup.cpp)
 add_executable(add_tags add_tags.cpp)
+add_executable(build_changeset_lookup build_changeset_lookup.cpp)
 
+target_link_libraries(build_changeset_lookup ${ALL_LIBRARIES})
 target_link_libraries(build_tag_lookup ${ALL_LIBRARIES})
 target_link_libraries(add_tags ${ALL_LIBRARIES})
 #-----------------------------------------------------------------------------
